@@ -212,6 +212,299 @@ HAVING
 ORDER BY
     avg_pending_reduction_rate_per_minute ASC; -- Ascending order to show slowest processing first
 
+-- Variable to control the number of days to analyze
+DECLARE @DaysToAnalyze INT = 5; -- Change this value to analyze more or fewer days
+
+-- NEW QUERY: Show last N days comparison with one column per day using PIVOT
+WITH daily_metrics AS (
+    SELECT
+        CAST(FORMAT(PATTERN_TIME, 'yyyy-MM-dd') AS DATE) AS date_only,
+        DATASET,
+        APP_JVM AS node,
+        report_type,
+        AVG(CAST(RUNNING AS FLOAT)) AS avg_running,
+        AVG(CAST(PENDING AS FLOAT)) AS avg_pending,
+        MAX(RUNNING) AS max_running,
+        MAX(PENDING) AS max_pending,
+        COUNT(*) AS sample_count
+    FROM thread_monitoring
+    WHERE 
+        -- Filter for the past N days excluding weekends (Saturday and Sunday)
+        PATTERN_TIME >= DATEADD(DAY, -@DaysToAnalyze, GETDATE())
+        AND DATEPART(WEEKDAY, PATTERN_TIME) NOT IN (1, 7)  -- 1=Sunday, 7=Saturday in DATEPART
+    GROUP BY
+        CAST(FORMAT(PATTERN_TIME, 'yyyy-MM-dd') AS DATE),
+        DATASET,
+        APP_JVM,
+        report_type
+),
+days_list AS (
+    SELECT 
+        date_only,
+        'day_' + CAST(ROW_NUMBER() OVER (ORDER BY date_only DESC) AS VARCHAR(2)) AS day_column
+    FROM (SELECT DISTINCT date_only FROM daily_metrics) AS distinct_dates
+    ORDER BY date_only DESC
+),
+-- Prepare data for pivoting with metrics and day columns
+metrics_for_pivot AS (
+    SELECT
+        m.DATASET,
+        m.node,
+        m.report_type,
+        d.day_column,
+        'avg_running' AS metric_type,
+        m.avg_running AS metric_value
+    FROM daily_metrics m
+    JOIN days_list d ON m.date_only = d.date_only
+    
+    UNION ALL
+    
+    SELECT
+        m.DATASET,
+        m.node,
+        m.report_type,
+        d.day_column,
+        'avg_pending' AS metric_type,
+        m.avg_pending AS metric_value
+    FROM daily_metrics m
+    JOIN days_list d ON m.date_only = d.date_only
+    
+    UNION ALL
+    
+    SELECT
+        m.DATASET,
+        m.node,
+        m.report_type,
+        d.day_column,
+        'max_running' AS metric_type,
+        m.max_running AS metric_value
+    FROM daily_metrics m
+    JOIN days_list d ON m.date_only = d.date_only
+    
+    UNION ALL
+    
+    SELECT
+        m.DATASET,
+        m.node,
+        m.report_type,
+        d.day_column,
+        'max_pending' AS metric_type,
+        m.max_pending AS metric_value
+    FROM daily_metrics m
+    JOIN days_list d ON m.date_only = d.date_only
+),
+-- Use a static PIVOT with conditional filtering based on @DaysToAnalyze
+WITH filtered_metrics AS (
+    SELECT
+        m.DATASET,
+        m.node,
+        m.report_type,
+        m.metric_type,
+        m.day_column,
+        m.metric_value
+    FROM metrics_for_pivot m
+    WHERE CAST(SUBSTRING(m.day_column, 5, 2) AS INT) <= @DaysToAnalyze
+),
+pivoted_metrics AS (
+    SELECT * FROM filtered_metrics
+    PIVOT (
+        MAX(metric_value)
+        FOR day_column IN ([day_1], [day_2], [day_3], [day_4], [day_5], 
+                          [day_6], [day_7], [day_8], [day_9], [day_10])
+    ) AS pivot_table
+),
+final_metrics AS (
+    SELECT
+        DATASET,
+        node,
+        report_type,
+        -- Day 1 (Most recent day)
+        MAX(CASE WHEN metric_type = 'avg_running' THEN [day_1] END) AS day1_avg_running,
+        MAX(CASE WHEN metric_type = 'avg_pending' THEN [day_1] END) AS day1_avg_pending,
+        MAX(CASE WHEN metric_type = 'max_running' THEN [day_1] END) AS day1_max_running,
+        MAX(CASE WHEN metric_type = 'max_pending' THEN [day_1] END) AS day1_max_pending,
+        
+        -- Day 2
+        MAX(CASE WHEN metric_type = 'avg_running' THEN [day_2] END) AS day2_avg_running,
+        MAX(CASE WHEN metric_type = 'avg_pending' THEN [day_2] END) AS day2_avg_pending,
+        MAX(CASE WHEN metric_type = 'max_running' THEN [day_2] END) AS day2_max_running,
+        MAX(CASE WHEN metric_type = 'max_pending' THEN [day_2] END) AS day2_max_pending,
+        
+        -- Day 3
+        MAX(CASE WHEN metric_type = 'avg_running' THEN [day_3] END) AS day3_avg_running,
+        MAX(CASE WHEN metric_type = 'avg_pending' THEN [day_3] END) AS day3_avg_pending,
+        MAX(CASE WHEN metric_type = 'max_running' THEN [day_3] END) AS day3_max_running,
+        MAX(CASE WHEN metric_type = 'max_pending' THEN [day_3] END) AS day3_max_pending,
+        
+        -- Day 4
+        MAX(CASE WHEN metric_type = 'avg_running' THEN [day_4] END) AS day4_avg_running,
+        MAX(CASE WHEN metric_type = 'avg_pending' THEN [day_4] END) AS day4_avg_pending,
+        MAX(CASE WHEN metric_type = 'max_running' THEN [day_4] END) AS day4_max_running,
+        MAX(CASE WHEN metric_type = 'max_pending' THEN [day_4] END) AS day4_max_pending,
+        
+        -- Day 5
+        MAX(CASE WHEN metric_type = 'avg_running' THEN [day_5] END) AS day5_avg_running,
+        MAX(CASE WHEN metric_type = 'avg_pending' THEN [day_5] END) AS day5_avg_pending,
+        MAX(CASE WHEN metric_type = 'max_running' THEN [day_5] END) AS day5_max_running,
+        MAX(CASE WHEN metric_type = 'max_pending' THEN [day_5] END) AS day5_max_pending,
+        
+        -- Additional days (will be NULL if @DaysToAnalyze < 6)
+        MAX(CASE WHEN metric_type = 'avg_running' THEN [day_6] END) AS day6_avg_running,
+        MAX(CASE WHEN metric_type = 'avg_pending' THEN [day_6] END) AS day6_avg_pending,
+        MAX(CASE WHEN metric_type = 'max_running' THEN [day_6] END) AS day6_max_running,
+        MAX(CASE WHEN metric_type = 'max_pending' THEN [day_6] END) AS day6_max_pending,
+        
+        MAX(CASE WHEN metric_type = 'avg_running' THEN [day_7] END) AS day7_avg_running,
+        MAX(CASE WHEN metric_type = 'avg_pending' THEN [day_7] END) AS day7_avg_pending,
+        MAX(CASE WHEN metric_type = 'max_running' THEN [day_7] END) AS day7_max_running,
+        MAX(CASE WHEN metric_type = 'max_pending' THEN [day_7] END) AS day7_max_pending,
+        
+        MAX(CASE WHEN metric_type = 'avg_running' THEN [day_8] END) AS day8_avg_running,
+        MAX(CASE WHEN metric_type = 'avg_pending' THEN [day_8] END) AS day8_avg_pending,
+        MAX(CASE WHEN metric_type = 'max_running' THEN [day_8] END) AS day8_max_running,
+        MAX(CASE WHEN metric_type = 'max_pending' THEN [day_8] END) AS day8_max_pending,
+        
+        MAX(CASE WHEN metric_type = 'avg_running' THEN [day_9] END) AS day9_avg_running,
+        MAX(CASE WHEN metric_type = 'avg_pending' THEN [day_9] END) AS day9_avg_pending,
+        MAX(CASE WHEN metric_type = 'max_running' THEN [day_9] END) AS day9_max_running,
+        MAX(CASE WHEN metric_type = 'max_pending' THEN [day_9] END) AS day9_max_pending,
+        
+        MAX(CASE WHEN metric_type = 'avg_running' THEN [day_10] END) AS day10_avg_running,
+        MAX(CASE WHEN metric_type = 'avg_pending' THEN [day_10] END) AS day10_avg_pending,
+        MAX(CASE WHEN metric_type = 'max_running' THEN [day_10] END) AS day10_max_running,
+        MAX(CASE WHEN metric_type = 'max_pending' THEN [day_10] END) AS day10_max_pending,
+        
+        -- Get the last day number for change calculations based on @DaysToAnalyze
+        CASE
+            WHEN @DaysToAnalyze >= 10 AND MAX(CASE WHEN metric_type = 'avg_running' THEN [day_10] END) IS NOT NULL THEN 10
+            WHEN @DaysToAnalyze >= 9 AND MAX(CASE WHEN metric_type = 'avg_running' THEN [day_9] END) IS NOT NULL THEN 9
+            WHEN @DaysToAnalyze >= 8 AND MAX(CASE WHEN metric_type = 'avg_running' THEN [day_8] END) IS NOT NULL THEN 8
+            WHEN @DaysToAnalyze >= 7 AND MAX(CASE WHEN metric_type = 'avg_running' THEN [day_7] END) IS NOT NULL THEN 7
+            WHEN @DaysToAnalyze >= 6 AND MAX(CASE WHEN metric_type = 'avg_running' THEN [day_6] END) IS NOT NULL THEN 6
+            WHEN @DaysToAnalyze >= 5 AND MAX(CASE WHEN metric_type = 'avg_running' THEN [day_5] END) IS NOT NULL THEN 5
+            WHEN @DaysToAnalyze >= 4 AND MAX(CASE WHEN metric_type = 'avg_running' THEN [day_4] END) IS NOT NULL THEN 4
+            WHEN @DaysToAnalyze >= 3 AND MAX(CASE WHEN metric_type = 'avg_running' THEN [day_3] END) IS NOT NULL THEN 3
+            WHEN @DaysToAnalyze >= 2 AND MAX(CASE WHEN metric_type = 'avg_running' THEN [day_2] END) IS NOT NULL THEN 2
+            WHEN MAX(CASE WHEN metric_type = 'avg_running' THEN [day_1] END) IS NOT NULL THEN 1
+            ELSE NULL
+        END AS last_day_number
+    FROM pivoted_metrics
+    GROUP BY
+        DATASET,
+        node,
+        report_type
+)
+SELECT
+    fm.*,
+    -- Overall change (day1 - lastDay) - dynamically selects the last available day
+    day1_avg_running - 
+    CASE fm.last_day_number
+        WHEN 10 THEN day10_avg_running
+        WHEN 9 THEN day9_avg_running
+        WHEN 8 THEN day8_avg_running
+        WHEN 7 THEN day7_avg_running
+        WHEN 6 THEN day6_avg_running
+        WHEN 5 THEN day5_avg_running
+        WHEN 4 THEN day4_avg_running
+        WHEN 3 THEN day3_avg_running
+        WHEN 2 THEN day2_avg_running
+        ELSE NULL
+    END AS running_change,
+    
+    day1_avg_pending - 
+    CASE fm.last_day_number
+        WHEN 10 THEN day10_avg_pending
+        WHEN 9 THEN day9_avg_pending
+        WHEN 8 THEN day8_avg_pending
+        WHEN 7 THEN day7_avg_pending
+        WHEN 6 THEN day6_avg_pending
+        WHEN 5 THEN day5_avg_pending
+        WHEN 4 THEN day4_avg_pending
+        WHEN 3 THEN day3_avg_pending
+        WHEN 2 THEN day2_avg_pending
+        ELSE NULL
+    END AS pending_change,
+    
+    -- Percent change - dynamically selects the last available day
+    CASE
+        WHEN fm.last_day_number = 10 AND day10_avg_running = 0 THEN NULL
+        WHEN fm.last_day_number = 9 AND day9_avg_running = 0 THEN NULL
+        WHEN fm.last_day_number = 8 AND day8_avg_running = 0 THEN NULL
+        WHEN fm.last_day_number = 7 AND day7_avg_running = 0 THEN NULL
+        WHEN fm.last_day_number = 6 AND day6_avg_running = 0 THEN NULL
+        WHEN fm.last_day_number = 5 AND day5_avg_running = 0 THEN NULL
+        WHEN fm.last_day_number = 4 AND day4_avg_running = 0 THEN NULL
+        WHEN fm.last_day_number = 3 AND day3_avg_running = 0 THEN NULL
+        WHEN fm.last_day_number = 2 AND day2_avg_running = 0 THEN NULL
+        WHEN fm.last_day_number IS NULL THEN NULL
+        ELSE (day1_avg_running - 
+            CASE fm.last_day_number
+                WHEN 10 THEN day10_avg_running
+                WHEN 9 THEN day9_avg_running
+                WHEN 8 THEN day8_avg_running
+                WHEN 7 THEN day7_avg_running
+                WHEN 6 THEN day6_avg_running
+                WHEN 5 THEN day5_avg_running
+                WHEN 4 THEN day4_avg_running
+                WHEN 3 THEN day3_avg_running
+                WHEN 2 THEN day2_avg_running
+                ELSE NULL
+            END) / 
+            CASE fm.last_day_number
+                WHEN 10 THEN day10_avg_running
+                WHEN 9 THEN day9_avg_running
+                WHEN 8 THEN day8_avg_running
+                WHEN 7 THEN day7_avg_running
+                WHEN 6 THEN day6_avg_running
+                WHEN 5 THEN day5_avg_running
+                WHEN 4 THEN day4_avg_running
+                WHEN 3 THEN day3_avg_running
+                WHEN 2 THEN day2_avg_running
+                ELSE NULL
+            END * 100
+    END AS running_pct_change,
+    
+    CASE 
+        WHEN fm.last_day_number = 10 AND day10_avg_pending = 0 THEN NULL
+        WHEN fm.last_day_number = 9 AND day9_avg_pending = 0 THEN NULL
+        WHEN fm.last_day_number = 8 AND day8_avg_pending = 0 THEN NULL
+        WHEN fm.last_day_number = 7 AND day7_avg_pending = 0 THEN NULL
+        WHEN fm.last_day_number = 6 AND day6_avg_pending = 0 THEN NULL
+        WHEN fm.last_day_number = 5 AND day5_avg_pending = 0 THEN NULL
+        WHEN fm.last_day_number = 4 AND day4_avg_pending = 0 THEN NULL
+        WHEN fm.last_day_number = 3 AND day3_avg_pending = 0 THEN NULL
+        WHEN fm.last_day_number = 2 AND day2_avg_pending = 0 THEN NULL
+        WHEN fm.last_day_number IS NULL THEN NULL
+        ELSE (day1_avg_pending - 
+            CASE fm.last_day_number
+                WHEN 10 THEN day10_avg_pending
+                WHEN 9 THEN day9_avg_pending
+                WHEN 8 THEN day8_avg_pending
+                WHEN 7 THEN day7_avg_pending
+                WHEN 6 THEN day6_avg_pending
+                WHEN 5 THEN day5_avg_pending
+                WHEN 4 THEN day4_avg_pending
+                WHEN 3 THEN day3_avg_pending
+                WHEN 2 THEN day2_avg_pending
+                ELSE NULL
+            END) / 
+            CASE fm.last_day_number
+                WHEN 10 THEN day10_avg_pending
+                WHEN 9 THEN day9_avg_pending
+                WHEN 8 THEN day8_avg_pending
+                WHEN 7 THEN day7_avg_pending
+                WHEN 6 THEN day6_avg_pending
+                WHEN 5 THEN day5_avg_pending
+                WHEN 4 THEN day4_avg_pending
+                WHEN 3 THEN day3_avg_pending
+                WHEN 2 THEN day2_avg_pending
+                ELSE NULL
+            END * 100
+    END AS pending_pct_change
+FROM final_metrics
+ORDER BY
+    day1_avg_pending DESC;
+
 -- Query to compare metrics for every 15 minutes over the past 5 days
 -- This creates 15-minute buckets and compares metrics across datasets and nodes
 WITH fifteen_min_buckets AS (
