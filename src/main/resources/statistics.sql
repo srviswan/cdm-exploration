@@ -93,7 +93,17 @@ SELECT
     APP_JVM AS node,
     report_type,
     AVG(CAST(PENDING AS FLOAT)) AS avg_pending,
-    MAX(PENDING) - MIN(PENDING) AS pending_increase
+    MAX(PENDING) - MIN(PENDING) AS pending_increase,
+    -- Calculate pending-to-running ratio (higher ratio indicates potential bottleneck)
+    CASE 
+        WHEN AVG(CAST(RUNNING AS FLOAT)) = 0 THEN NULL
+        ELSE AVG(CAST(PENDING AS FLOAT)) / AVG(CAST(RUNNING AS FLOAT))
+    END AS pending_to_running_ratio,
+    -- Calculate rate of pending queue reduction (negative value means queue is reducing)
+    CASE
+        WHEN DATEDIFF(SECOND, MIN(PATTERN_TIME), MAX(PATTERN_TIME)) = 0 THEN NULL
+        ELSE (MIN(PENDING) - MAX(PENDING)) / CAST(DATEDIFF(SECOND, MIN(PATTERN_TIME), MAX(PATTERN_TIME)) AS FLOAT)
+    END AS pending_reduction_rate_per_second
 FROM thread_monitoring
 GROUP BY 
     FORMAT(PATTERN_TIME, 'yyyy-MM-dd HH:mm:00'),
@@ -101,7 +111,7 @@ GROUP BY
     APP_JVM,
     report_type
 HAVING 
-    MAX(PENDING) - MIN(PENDING) > 0
+    MAX(PENDING) - MIN(PENDING) <> 0 -- Show any change in pending queue
 ORDER BY 
     pending_increase DESC,
     minute_bucket;
@@ -121,6 +131,86 @@ GROUP BY
 ORDER BY 
     minute_bucket,
     report_type;
+
+-- NEW QUERY: Identify datasets with highest average load
+SELECT TOP 10
+    DATASET,
+    report_type,
+    AVG(CAST(RUNNING AS FLOAT)) AS avg_running,
+    AVG(CAST(PENDING AS FLOAT)) AS avg_pending,
+    -- Calculate average processing time indicator (pending-to-running ratio)
+    AVG(CAST(PENDING AS FLOAT)) / NULLIF(AVG(CAST(RUNNING AS FLOAT)), 0) AS avg_processing_time_indicator,
+    -- Calculate max pending count
+    MAX(PENDING) AS max_pending_count,
+    -- Calculate total samples
+    COUNT(*) AS sample_count
+FROM thread_monitoring
+WHERE 
+    -- Filter for the past 5 days excluding weekends (Saturday and Sunday)
+    PATTERN_TIME >= DATEADD(DAY, -5, GETDATE())
+    AND DATEPART(WEEKDAY, PATTERN_TIME) NOT IN (1, 7)  -- 1=Sunday, 7=Saturday in DATEPART
+GROUP BY
+    DATASET,
+    report_type
+ORDER BY
+    avg_pending DESC;
+
+-- NEW QUERY: Identify nodes with highest average load
+SELECT TOP 10
+    APP_JVM AS node,
+    report_type,
+    AVG(CAST(RUNNING AS FLOAT)) AS avg_running,
+    AVG(CAST(PENDING AS FLOAT)) AS avg_pending,
+    -- Calculate average processing time indicator (pending-to-running ratio)
+    AVG(CAST(PENDING AS FLOAT)) / NULLIF(AVG(CAST(RUNNING AS FLOAT)), 0) AS avg_processing_time_indicator,
+    -- Calculate max pending count
+    MAX(PENDING) AS max_pending_count,
+    -- Calculate total samples
+    COUNT(*) AS sample_count
+FROM thread_monitoring
+WHERE 
+    -- Filter for the past 5 days excluding weekends (Saturday and Sunday)
+    PATTERN_TIME >= DATEADD(DAY, -5, GETDATE())
+    AND DATEPART(WEEKDAY, PATTERN_TIME) NOT IN (1, 7)  -- 1=Sunday, 7=Saturday in DATEPART
+GROUP BY
+    APP_JVM,
+    report_type
+ORDER BY
+    avg_pending DESC;
+
+-- NEW QUERY: Calculate processing efficiency by dataset and node
+-- Lower pending reduction rate indicates slower processing
+SELECT
+    DATASET,
+    APP_JVM AS node,
+    report_type,
+    -- Calculate average pending reduction rate per minute
+    AVG(
+        CASE
+            WHEN DATEDIFF(MINUTE, LAG(PATTERN_TIME) OVER (PARTITION BY DATASET, APP_JVM, report_type ORDER BY PATTERN_TIME), PATTERN_TIME) = 0 THEN NULL
+            ELSE (LAG(PENDING) OVER (PARTITION BY DATASET, APP_JVM, report_type ORDER BY PATTERN_TIME) - PENDING) / 
+                 CAST(DATEDIFF(MINUTE, LAG(PATTERN_TIME) OVER (PARTITION BY DATASET, APP_JVM, report_type ORDER BY PATTERN_TIME), PATTERN_TIME) AS FLOAT)
+        END
+    ) AS avg_pending_reduction_rate_per_minute,
+    -- Calculate average running threads
+    AVG(CAST(RUNNING AS FLOAT)) AS avg_running,
+    -- Calculate average pending count
+    AVG(CAST(PENDING AS FLOAT)) AS avg_pending,
+    -- Calculate max pending count
+    MAX(PENDING) AS max_pending
+FROM thread_monitoring
+WHERE 
+    -- Filter for the past 5 days excluding weekends (Saturday and Sunday)
+    PATTERN_TIME >= DATEADD(DAY, -5, GETDATE())
+    AND DATEPART(WEEKDAY, PATTERN_TIME) NOT IN (1, 7)  -- 1=Sunday, 7=Saturday in DATEPART
+GROUP BY
+    DATASET,
+    APP_JVM,
+    report_type
+HAVING
+    COUNT(*) > 1 -- Need at least 2 samples to calculate reduction rate
+ORDER BY
+    avg_pending_reduction_rate_per_minute ASC; -- Ascending order to show slowest processing first
 
 -- Query to compare metrics for every 15 minutes over the past 5 days
 -- This creates 15-minute buckets and compares metrics across datasets and nodes
