@@ -1,0 +1,189 @@
+server:
+  port: 8080
+  netty:
+    connection-timeout: 20s
+    h2c-max-content-length: 0B
+  shutdown: graceful
+
+spring:
+  application:
+    name: position-service
+  main:
+    lazy-initialization: false
+  
+  # Virtual Threads Configuration (Java 23)
+  threads:
+    virtual:
+      enabled: true
+  
+  # Database Configuration
+  r2dbc:
+    url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:equity_swaps}
+    username: ${DB_USERNAME:equity_user}
+    password: ${DB_PASSWORD:equity_pass}
+    pool:
+      enabled: true
+      initial-size: 5
+      max-size: 20
+      max-idle-time: 30m
+      validation-query: SELECT 1
+
+  # Redis Configuration
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:redis_pass}
+      database: 0
+      timeout: 2000ms
+      lettuce:
+        pool:
+          enabled: true
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+  # Kafka Configuration
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 3
+      enable-idempotence: true
+      batch-size: 16384
+      linger-ms: 5
+      buffer-memory: 33554432
+    consumer:
+      group-id: position-service
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      properties:
+        spring.json.trusted.packages: "com.equityswaps.common.domain,com.equityswaps.position.dto"
+
+  # JSON Configuration
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+      write-date-timestamps-as-nanoseconds: false
+    deserialization:
+      read-date-timestamps-as-nanoseconds: false
+    default-property-inclusion: NON_NULL
+
+# Management and Monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,env,configprops
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+        step: 10s
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        position.calculation.time: true
+      percentiles:
+        http.server.requests: 0.5, 0.95, 0.99
+        position.calculation.time: 0.5, 0.95, 0.99
+  tracing:
+    sampling:
+      probability: 1.0
+
+# Application Configuration
+application:
+  position:
+    cache:
+      ttl: 5m
+      max-size: 10000
+    calculation:
+      thread-pool-size: 100
+      batch-size: 1000
+    real-time:
+      heartbeat-interval: 30s
+      buffer-size: 1000
+
+# Security Configuration
+security:
+  oauth2:
+    resourceserver:
+      jwt:
+        issuer-uri: ${JWT_ISSUER_URI:http://localhost:8081/auth/realms/equity-swaps}
+
+# Logging Configuration
+logging:
+  level:
+    com.equityswaps: DEBUG
+    org.springframework.r2dbc: DEBUG
+    org.springframework.kafka: INFO
+    reactor.netty: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-},%X{spanId:-}] %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-},%X{spanId:-}] %logger{36} - %msg%n"
+
+# OpenAPI Documentation
+springdoc:
+  api-docs:
+    enabled: true
+    path: /api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+  packages-to-scan: com.equityswaps.position.controller
+
+---
+# Development Profile
+spring:
+  config:
+    activate:
+      on-profile: dev
+  
+  r2dbc:
+    url: r2dbc:h2:mem:///testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: 
+  
+  h2:
+    console:
+      enabled: true
+
+logging:
+  level:
+    root: INFO
+    com.equityswaps: DEBUG
+
+---
+# Production Profile  
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+  r2dbc:
+    pool:
+      max-size: 50
+      initial-size: 10
+
+logging:
+  level:
+    root: WARN
+    com.equityswaps: INFO
+  file:
+    name: /var/log/position-service.log
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
