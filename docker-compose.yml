@@ -1,0 +1,334 @@
+version: '3.8'
+
+services:
+  # Infrastructure Services
+  postgres:
+    image: postgres:15-alpine
+    container_name: equity-swaps-postgres
+    environment:
+      POSTGRES_DB: equity_swaps
+      POSTGRES_USER: equity_user
+      POSTGRES_PASSWORD: equity_pass
+      POSTGRES_MULTIPLE_DATABASES: cdm_events
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d
+    networks:
+      - equity-swaps-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U equity_user -d equity_swaps"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: equity-swaps-redis
+    command: redis-server --appendonly yes --requirepass redis_pass
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - equity-swaps-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: equity-swaps-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_INIT_LIMIT: 5
+      ZOOKEEPER_SYNC_LIMIT: 2
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - equity-swaps-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: equity-swaps-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - equity-swaps-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: equity-swaps-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: equity-swaps-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    ports:
+      - "8090:8080"
+    networks:
+      - equity-swaps-network
+
+  # Microservices
+  position-service:
+    build:
+      context: ./position-service
+      dockerfile: Dockerfile
+    container_name: equity-swaps-position-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_URL: jdbc:postgresql://postgres:5432/equity_swaps
+      DB_USERNAME: equity_user
+      DB_PASSWORD: equity_pass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: redis_pass
+      KAFKA_BROKERS: kafka:9092
+      CDM_EVENT_STORE_URL: jdbc:postgresql://postgres:5432/cdm_events
+      JAVA_OPTS: >
+        -XX:+UseZGC 
+        -XX:+UnlockExperimentalVMOptions 
+        --enable-preview
+        -Dspring.threads.virtual.enabled=true
+        -Xms512m 
+        -Xmx1g
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - equity-swaps-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  lot-service:
+    build:
+      context: ./lot-service
+      dockerfile: Dockerfile
+    container_name: equity-swaps-lot-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_URL: jdbc:postgresql://postgres:5432/equity_swaps
+      DB_USERNAME: equity_user
+      DB_PASSWORD: equity_pass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: redis_pass
+      KAFKA_BROKERS: kafka:9092
+      CDM_EVENT_STORE_URL: jdbc:postgresql://postgres:5432/cdm_events
+      JAVA_OPTS: >
+        -XX:+UseZGC 
+        -XX:+UnlockExperimentalVMOptions 
+        --enable-preview
+        -Dspring.threads.virtual.enabled=true
+        -Xms512m 
+        -Xmx1g
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - equity-swaps-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  cashflow-service:
+    build:
+      context: ./cashflow-service
+      dockerfile: Dockerfile
+    container_name: equity-swaps-cashflow-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_URL: jdbc:postgresql://postgres:5432/equity_swaps
+      DB_USERNAME: equity_user
+      DB_PASSWORD: equity_pass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: redis_pass
+      KAFKA_BROKERS: kafka:9092
+      CDM_EVENT_STORE_URL: jdbc:postgresql://postgres:5432/cdm_events
+      JAVA_OPTS: >
+        -XX:+UseZGC 
+        -XX:+UnlockExperimentalVMOptions 
+        --enable-preview
+        -Dspring.threads.virtual.enabled=true
+        -Xms512m 
+        -Xmx1g
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - equity-swaps-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Monitoring and Observability
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: equity-swaps-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - equity-swaps-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: equity-swaps-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: false
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - equity-swaps-network
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: equity-swaps-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: true
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # HTTP collector
+      - "14250:14250"  # gRPC collector
+      - "6831:6831/udp"  # Jaeger agent
+    networks:
+      - equity-swaps-network
+
+  # Development Tools
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: equity-swaps-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@equityswaps.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "8080:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - equity-swaps-network
+
+  # Market Data Simulator (for testing)
+  market-data-simulator:
+    build:
+      context: ./market-data-simulator
+      dockerfile: Dockerfile
+    container_name: equity-swaps-market-data-simulator
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      SIMULATION_INTERVAL: 1000  # milliseconds
+      INSTRUMENTS: AAPL,GOOGL,MSFT,AMZN,TSLA
+    networks:
+      - equity-swaps-network
+
+networks:
+  equity-swaps-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  kafka_data:
+    driver: local
+  zookeeper_data:
+    driver: local
+  zookeeper_logs:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  pgadmin_data:
+    driver: local

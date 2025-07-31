@@ -1,10 +1,41 @@
-HELP.md
-target/
-!.mvn/wrapper/maven-wrapper.jar
-!**/src/main/**/target/
-!**/src/test/**/target/
+# Java
+*.class
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
 
-### STS ###
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Gradle
+.gradle
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+# Eclipse
 .apt_generated
 .classpath
 .factorypath
@@ -12,27 +43,161 @@ target/
 .settings
 .springBeans
 .sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
 
-### IntelliJ IDEA ###
-.idea
-*.iws
-*.iml
-*.ipr
-
-### NetBeans ###
+# NetBeans
 /nbproject/private/
 /nbbuild/
 /dist/
 /nbdist/
 /.nb-gradle/
-build/
-!**/src/main/**/build/
-!**/src/test/**/build/
 
-### VS Code ###
+# VS Code
 .vscode/
 
-### Maven ###
-.mvn/
-mvnw
-mvnw.cmd
+# Mac
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Dependency directories
+node_modules/
+
+# Docker
+.dockerignore
+Dockerfile.dev
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Spring Boot
+spring.log
+
+# JPA Buddy
+.jpb/
+
+# Redis dump file
+dump.rdb
+
+# Kafka logs
+kafka-logs/
+
+# H2 Database files
+*.mv.db
+*.trace.db
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# Security
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+*.truststore
+
+# Application specific
+application-local.yml
+application-dev.yml
+application-secret.yml
+
+# CDM generated files
+cdm-generated/
+*.rosetta.cache
+
+# Test reports
+test-results/
+cucumber-reports/
+surefire-reports/
+failsafe-reports/
+
+# JMH benchmarks
+*.jar
+jmh-result.json
+
+# JProfiler
+*.jprofile
+
+# YourKit
+*.yjp
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+
+# Package Files
+*.deb
+*.rpm
+
+# Virtual machine crash logs
+hs_err_pid*
+replay_pid*
+
+# Kubernetes secrets
+k8s/secrets/
+*.secret.yaml
+
+# Helm charts
+charts/*.tgz
+
+# Local scripts
+run-local.sh
+debug.sh
+
+# IDE specific files
+*.code-workspace
+.metals/
+.bloop/
+project/metals.sbt
+
+# OS generated files
+Icon?
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
